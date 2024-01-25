@@ -9,6 +9,22 @@ euler_angle_t euler;
 
 
 /**
+ * @brief calculate euler angle from accelerometer data
+ * 
+ * @param acce_data accelerometer data
+ * @param roll roll angle
+ * @param pitch pitch angle
+ * @param yaw yaw angle
+*/
+static void calculate_euler_angle_from_accel(mpu6050_acce_value_t* acce_data, complimentary_angle_t* complimentary_angle)
+{
+    complimentary_angle->roll = atan2f(acce_data->acce_y, acce_data->acce_z) * 180.0f / M_PI;
+
+    complimentary_angle->pitch = atan2f(acce_data->acce_x, acce_data->acce_z) * 180.0f / M_PI;
+}
+
+
+/**
  * @brief task read euler angle from MPU6050 sensor
  * 
  * @param euler euler angle
@@ -16,8 +32,8 @@ euler_angle_t euler;
 static void kalman_euler_angle_read(void* pvParameters)
 {
     double dt = (double)DT / 1000.0;
-    double std_dev_v = 0.001;
-    double std_dev_w = 0.001;
+    double std_dev_v = STD_DEV_V;
+    double std_dev_w = STD_DEV_W;
 
     // init measurement
     mpu6050_acce_value_t acce_data;
@@ -26,11 +42,29 @@ static void kalman_euler_angle_read(void* pvParameters)
 
     mpu_get_data(&acce_data, &gyro_data, &temp_data);
 
-    double roll = atan(acce_data.acce_y / sqrt(pow(acce_data.acce_x, 2.0) + pow(acce_data.acce_z, 2.0))) * 180.0 / M_PI;
-    double pitch = atan(-acce_data.acce_x / sqrt(pow(acce_data.acce_y, 2.0) + pow(acce_data.acce_z, 2.0))) * 180.0 / M_PI;
-    double yaw = atan(acce_data.acce_x / sqrt(pow(acce_data.acce_y, 2.0))) * 180.0 / M_PI;
+    complimentary_angle_t complimentary_angle;
+    calculate_euler_angle_from_accel(&acce_data, &complimentary_angle);
 
-    // state model
+    /*
+
+    Xpri' = A * Xpri + B * U
+      Y   = C * Xpri + D * U
+
+    --    --   --     --   --   --   --  --            
+    | phi' |   | 1 -dt |   | phi |   | dt |   --     --
+    |      | = |       | * |     | + |    | * | Wgyro |
+    |  g'  |   | 0   1 |   |  g  |   |  0 |   --     --
+    --    --   --     --   --   --   --  --            
+
+                  --   --
+        --   --   | phi |
+    Y = | 1 0 | * |     |
+        --   --   |  g  |
+                  --   --
+
+    */
+
+    // state space model
     matrix_t A;
     matrix_alloc(&A, 2, 2);
     A.array[0][0] = 1.0;
@@ -62,13 +96,11 @@ static void kalman_euler_angle_read(void* pvParameters)
 
     // initial states
     matrix_t Xpri;
-    matrix_alloc(&Xpri, 2, 3);
+    matrix_alloc(&Xpri, 2, 2);
     Xpri.array[0][0] = 0.0;
     Xpri.array[0][1] = 0.0;
-    Xpri.array[0][2] = 0.0;
     Xpri.array[1][0] = 0.0;
     Xpri.array[1][1] = 0.0;
-    Xpri.array[1][2] = 0.0;
 
     matrix_t Ppri;
     matrix_alloc(&Ppri, 2, 2);
@@ -78,13 +110,11 @@ static void kalman_euler_angle_read(void* pvParameters)
     Ppri.array[1][1] = 1.0;
 
     matrix_t Xpost;
-    matrix_alloc(&Xpost, 2, 3);
-    Xpost.array[0][0] = roll;
-    Xpost.array[0][1] = pitch;
-    Xpost.array[0][2] = yaw;
+    matrix_alloc(&Xpost, 2, 2);
+    Xpost.array[0][0] = complimentary_angle.roll;
+    Xpost.array[0][1] = complimentary_angle.pitch;
     Xpost.array[1][0] = 0.0;
     Xpost.array[1][1] = 0.0;
-    Xpost.array[1][2] = 0.0;
 
     matrix_t Ppost;
     matrix_alloc(&Ppost, 2, 2);
@@ -94,16 +124,14 @@ static void kalman_euler_angle_read(void* pvParameters)
     Ppost.array[1][1] = 1.0;
 
     matrix_t U;
-    matrix_alloc(&U, 1, 3);
+    matrix_alloc(&U, 1, 2);
     U.array[0][0] = 0.0;
     U.array[0][1] = 0.0;
-    U.array[0][2] = 0.0;
 
     matrix_t Y;
-    matrix_alloc(&Y, 1, 3);
+    matrix_alloc(&Y, 1, 2);
     U.array[0][0] = 0.0;
     U.array[0][1] = 0.0;
-    U.array[0][2] = 0.0;
 
     matrix_t E;
     matrix_alloc(&E, 1, 1);
@@ -127,6 +155,7 @@ static void kalman_euler_angle_read(void* pvParameters)
 
     matrix_t At;
     matrix_alloc(&At, A.cols, A.rows);
+    matrix_trans(&A, &At);
 
     matrix_t APpostAt;
     matrix_alloc(&APpostAt, APpost.rows, At.cols);
@@ -139,6 +168,7 @@ static void kalman_euler_angle_read(void* pvParameters)
 
     matrix_t Ct;
     matrix_alloc(&Ct, C.cols, C.rows);
+    matrix_trans(&C, &Ct);
 
     matrix_t CPpriCt;
     matrix_alloc(&CPpriCt, CPpri.rows, Ct.cols);
@@ -167,17 +197,13 @@ static void kalman_euler_angle_read(void* pvParameters)
         // new measurement
         mpu_get_data(&acce_data, &gyro_data, &temp_data);
 
-        roll = atan(acce_data.acce_y / sqrt(pow(acce_data.acce_x, 2.0) + pow(acce_data.acce_z, 2.0))) * 180.0 / M_PI;
-        pitch = atan(-acce_data.acce_x / sqrt(pow(acce_data.acce_y, 2.0) + pow(acce_data.acce_z, 2.0))) * 180.0 / M_PI;
-        yaw = atan(acce_data.acce_x / sqrt(pow(acce_data.acce_y, 2.0))) * 180.0 / M_PI;
+        calculate_euler_angle_from_accel(&acce_data, &complimentary_angle);
 
         U.array[0][0] = gyro_data.gyro_x;
         U.array[0][1] = gyro_data.gyro_y;
-        U.array[0][2] = gyro_data.gyro_z;
 
-        Y.array[0][0] = roll;
-        Y.array[0][1] = pitch;
-        Y.array[0][2] = yaw;
+        Y.array[0][0] = complimentary_angle.roll;
+        Y.array[0][1] = complimentary_angle.pitch;
 
         // Xpri
         matrix_mul(&A, &Xpost, &AXpost);
@@ -186,17 +212,15 @@ static void kalman_euler_angle_read(void* pvParameters)
 
         // Ppri
         matrix_mul(&A, &Ppost, &APpost);
-        matrix_trans(&A, &At);
         matrix_mul(&APpost, &At, &APpostAt);
         matrix_add(&APpostAt, &V, &Ppri);
 
-        // eps
+        // E
         matrix_mul(&C, &Xpri, &CXpri);
         matrix_sub(&Y, &CXpri, &E);
 
         // S
         matrix_mul(&C, &Ppri, &CPpri);
-        matrix_trans(&C, &Ct);
         matrix_mul(&CPpri, &Ct, &CPpriCt);
         matrix_add(&CPpriCt, &W, &S);
 
@@ -205,7 +229,7 @@ static void kalman_euler_angle_read(void* pvParameters)
         matrix_mul(&Ppri, &Ct, &PpriCt);
         matrix_mul(&PpriCt, &Sinv, &K);
 
-        // xpost
+        // Xpost
         matrix_mul(&K, &E, &KE);
         matrix_add(&Xpri, &KE, &Xpost);
 
@@ -215,12 +239,15 @@ static void kalman_euler_angle_read(void* pvParameters)
         matrix_mul(&KS, &Kt, &KSKt);
         matrix_sub(&Ppri, &KSKt, &Ppost);
 
-        // calcula euler angle from gyro
+        // calculate euler angle from gyro
         if (xSemaphoreTake(mutex, MUTEX_MAX_WAIT) == pdTRUE)
         {
-            euler.roll += (gyro_data.gyro_x - Xpost.array[1][0]) * dt;
-            euler.pitch += (gyro_data.gyro_y - Xpost.array[1][1]) * dt;
-            euler.yaw += (gyro_data.gyro_z - Xpost.array[1][2]) * dt;
+            euler.acce_roll = Xpost.array[0][0];
+            euler.acce_pitch = Xpost.array[0][1];
+
+            euler.gyro_roll += (gyro_data.gyro_x - Xpost.array[1][0]) * dt;
+            euler.gyro_pitch += (gyro_data.gyro_y - Xpost.array[1][1]) * dt;
+            euler.gyro_yaw += (gyro_data.gyro_z - (Xpost.array[1][0] + Xpost.array[1][1]) / 2.0) * dt;
 
             xSemaphoreGive(mutex);
 
@@ -304,9 +331,11 @@ void mpu_init(mpu_i2c_conf_t mpu_conf)
 
     if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE)
     {
-        euler.roll = 0.0f;
-        euler.pitch = 0.0f;
-        euler.yaw = 0.0f;
+        euler.acce_roll = 0.0f;
+        euler.acce_pitch = 0.0f;
+        euler.gyro_roll = 0.0f;
+        euler.gyro_pitch = 0.0f;
+        euler.gyro_yaw = 0.0f;
 
         xSemaphoreGive(mutex);
     }
@@ -343,9 +372,12 @@ void mpu_get_euler_angle(euler_angle_t* euler_angle)
 {
     if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE)
     {
-        euler_angle->roll = euler.roll;
-        euler_angle->pitch = euler.pitch;
-        euler_angle->yaw = euler.yaw;
+        euler_angle->acce_roll = euler.acce_roll;
+        euler_angle->acce_pitch = euler.acce_pitch;
+
+        euler_angle->gyro_roll = euler.gyro_roll;
+        euler_angle->gyro_pitch = euler.gyro_pitch;
+        euler_angle->gyro_yaw = euler.gyro_yaw;
 
         xSemaphoreGive(mutex);
     }
@@ -353,4 +385,21 @@ void mpu_get_euler_angle(euler_angle_t* euler_angle)
     {
         ESP_LOGE(TAG, "Failed to take mutex");
     }
+}
+
+
+/**
+ * @brief get complimentary angle
+ * 
+ * @param complimentary_angle complimentary angle (roll, pitch)
+*/
+void mpu_get_roll_pitch(complimentary_angle_t* complimentary_angle)
+{
+    mpu6050_acce_value_t acce_data;
+    mpu6050_gyro_value_t gyro_data;
+    mpu6050_temp_value_t temp_data;
+
+    mpu_get_data(&acce_data, &gyro_data, &temp_data);
+
+    mpu6050_complimentory_filter(mpu, &acce_data, &gyro_data, complimentary_angle);
 }

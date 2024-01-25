@@ -8,8 +8,11 @@
 #include "esp_matrix.h"
 #include "esp_log.h"
 
-#define DT 10
+#define DT 10 // integration step in ms
 #define MUTEX_MAX_WAIT (DT / portTICK_PERIOD_MS)
+
+#define STD_DEV_V 0.01 // process noise
+#define STD_DEV_W 0.0001 // sensor noise
 
 typedef struct {
     i2c_port_t i2c_num;
@@ -20,9 +23,11 @@ typedef struct {
 } mpu_i2c_conf_t;
 
 typedef struct {
-    float roll;
-    float pitch;
-    float yaw;
+    float acce_roll;
+    float acce_pitch;
+    float gyro_roll;
+    float gyro_pitch;
+    float gyro_yaw;
 } euler_angle_t;
 
 
@@ -31,3 +36,5 @@ void mpu_init(mpu_i2c_conf_t mpu_conf);
 void mpu_get_data(mpu6050_acce_value_t* acce, mpu6050_gyro_value_t* gyro, mpu6050_temp_value_t* temp);
 
 void mpu_get_euler_angle(euler_angle_t* euler_angle);
+
+void mpu_get_roll_pitch(complimentary_angle_t* complimentary_angle);
