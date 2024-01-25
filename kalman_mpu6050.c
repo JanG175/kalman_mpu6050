@@ -20,7 +20,7 @@ static void calculate_euler_angle_from_accel(mpu6050_acce_value_t* acce_data, co
 {
     complimentary_angle->roll = atan2f(acce_data->acce_y, acce_data->acce_z) * 180.0f / M_PI;
 
-    complimentary_angle->pitch = atan2f(acce_data->acce_x, acce_data->acce_z) * 180.0f / M_PI;
+    complimentary_angle->pitch = atan2f(-acce_data->acce_x, acce_data->acce_z) * 180.0f / M_PI;
 }
 
 
@@ -85,14 +85,14 @@ static void kalman_euler_angle_read(void* pvParameters)
     // noise
     matrix_t V;
     matrix_alloc(&V, 2, 2);
-    V.array[0][0] = std_dev_v*std_dev_v*dt;
+    V.array[0][0] = pow(std_dev_v, 2.0);
     V.array[0][1] = 0.0;
     V.array[1][0] = 0.0;
-    V.array[1][1] = std_dev_v*std_dev_v*dt;
+    V.array[1][1] = pow(std_dev_v, 2.0);
 
     matrix_t W;
     matrix_alloc(&W, 1, 1);
-    W.array[0][0] = std_dev_w*std_dev_w;
+    W.array[0][0] = pow(std_dev_w, 2.0);
 
     // initial states
     matrix_t Xpri;
@@ -134,8 +134,7 @@ static void kalman_euler_angle_read(void* pvParameters)
     U.array[0][1] = 0.0;
 
     matrix_t E;
-    matrix_alloc(&E, 1, 1);
-    E.array[0][0] = 0.0;
+    matrix_alloc(&E, 1, 2);
 
     matrix_t S;
     matrix_alloc(&S, 1, 1);

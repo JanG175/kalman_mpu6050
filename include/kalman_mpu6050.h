@@ -12,7 +12,7 @@
 #define MUTEX_MAX_WAIT (DT / portTICK_PERIOD_MS)
 
 #define STD_DEV_V 0.01 // process noise
-#define STD_DEV_W 0.0001 // sensor noise
+#define STD_DEV_W 0.2 // sensor noise
 
 typedef struct {
     i2c_port_t i2c_num;
