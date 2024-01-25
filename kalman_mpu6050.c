@@ -7,6 +7,9 @@ static mpu6050_handle_t mpu;
 static SemaphoreHandle_t mutex = NULL;
 euler_angle_t euler;
 
+static portMUX_TYPE spinlock = portMUX_INITIALIZER_UNLOCKED;
+static float g_yaw = 0.0f;
+
 
 /**
  * @brief calculate euler angle from accelerometer data
@@ -31,6 +34,10 @@ static void calculate_euler_angle_from_accel(mpu6050_acce_value_t* acce_data, co
 */
 static void kalman_euler_angle_read(void* pvParameters)
 {
+    portENTER_CRITICAL(&spinlock);
+    float yaw_drift = g_yaw;
+    portEXIT_CRITICAL(&spinlock);
+
     double dt = (double)DT / 1000.0;
     double std_dev_v = STD_DEV_V;
     double std_dev_w = STD_DEV_W;
@@ -44,6 +51,19 @@ static void kalman_euler_angle_read(void* pvParameters)
 
     complimentary_angle_t complimentary_angle;
     calculate_euler_angle_from_accel(&acce_data, &complimentary_angle);
+
+    // zero roll and pitch with accelerometer
+    if (xSemaphoreTake(mutex, portMAX_DELAY) == pdTRUE)
+    {
+        euler.gyro_roll = complimentary_angle.roll;
+        euler.gyro_pitch = complimentary_angle.pitch;
+
+        xSemaphoreGive(mutex);
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Failed to take mutex");
+    }
 
     /*
 
@@ -246,7 +266,7 @@ static void kalman_euler_angle_read(void* pvParameters)
 
             euler.gyro_roll += (gyro_data.gyro_x - Xpost.array[1][0]) * dt;
             euler.gyro_pitch += (gyro_data.gyro_y - Xpost.array[1][1]) * dt;
-            euler.gyro_yaw += (gyro_data.gyro_z - (Xpost.array[1][0] + Xpost.array[1][1]) / 2.0) * dt;
+            euler.gyro_yaw += (gyro_data.gyro_z - (Xpost.array[1][0] + Xpost.array[1][1] + yaw_drift) / 3.0) * dt;
 
             xSemaphoreGive(mutex);
 
@@ -343,6 +363,8 @@ void mpu_init(mpu_i2c_conf_t mpu_conf)
         ESP_LOGE(TAG, "Failed to take mutex");
     }
 
+    mpu_find_yaw_drift();
+
     xTaskCreate(kalman_euler_angle_read, "kalman euler angle read", 4096, NULL, 3, NULL);
 }
 
@@ -401,4 +423,41 @@ void mpu_get_roll_pitch(complimentary_angle_t* complimentary_angle)
     mpu_get_data(&acce_data, &gyro_data, &temp_data);
 
     mpu6050_complimentory_filter(mpu, &acce_data, &gyro_data, complimentary_angle);
+}
+
+
+/**
+ * @brief find yaw drift
+ * 
+*/
+void mpu_find_yaw_drift()
+{
+    mpu6050_gyro_value_t gyro_data;
+    float last_gyro_z = 0.0f;
+    float yaw_drift = 0.0f;
+
+    ESP_LOGW(TAG, "Finding yaw drift - keep the sensor still...");
+    for (uint32_t i = 0; i <= 100; i++)
+    {
+        mpu6050_get_gyro(mpu, &gyro_data);
+
+        if (i == 0)
+        {
+            last_gyro_z = gyro_data.gyro_z;
+        }
+        else
+        {
+            yaw_drift += (gyro_data.gyro_z - last_gyro_z);
+            last_gyro_z = gyro_data.gyro_z;
+        }
+
+        vTaskDelay(DT / portTICK_PERIOD_MS);
+    }
+    ESP_LOGI(TAG, "Yaw drift found!");
+
+    yaw_drift /= 100.0f;
+
+    portENTER_CRITICAL(&spinlock);
+    g_yaw = yaw_drift;
+    portEXIT_CRITICAL(&spinlock);
 }

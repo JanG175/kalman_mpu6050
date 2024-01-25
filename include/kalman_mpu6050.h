@@ -38,3 +38,5 @@ void mpu_get_data(mpu6050_acce_value_t* acce, mpu6050_gyro_value_t* gyro, mpu605
 void mpu_get_euler_angle(euler_angle_t* euler_angle);
 
 void mpu_get_roll_pitch(complimentary_angle_t* complimentary_angle);
+
+void mpu_find_yaw_drift();
